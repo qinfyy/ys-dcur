@@ -5,13 +5,13 @@ using Org.BouncyCastle.Crypto;
 using Org.BouncyCastle.Crypto.Parameters;
 using Org.BouncyCastle.Security;
 using Org.BouncyCastle.OpenSsl;
-using Google.Protobuf;
+using ProtoBuf;
 using Dispatch;
 using System.Collections.Generic;
 using System.Runtime.InteropServices;
 using Newtonsoft.Json;
 
-namespace Cur
+namespace ys.dcur
 {
     class Program
     {
@@ -99,18 +99,17 @@ namespace Cur
 
         static void Main()
         {
-            string pubKeyPath = "ServerPub.pem";
-            string privKeyPath = "ClientPri.pem";
+            string pubKeyPath = "keys/ServerPub.pem";
 
-            string privKeyText = File.ReadAllText(privKeyPath);
+            string[] privKeyPaths =
+            {
+                "keys/ClientPri2.pem",
+                "keys/ClientPri3.pem",
+                "keys/ClientPri4.pem",
+                "keys/ClientPri5.pem"
+            };
+
             string pubKeyText = File.ReadAllText(pubKeyPath);
-
-            AsymmetricCipherKeyPair keyPair = GetAsymmetricCipherKeyPairFromPem(privKeyText);
-            RsaPrivateCrtKeyParameters privKeyParameters = (RsaPrivateCrtKeyParameters)keyPair.Private;
-            RSAParameters rsaPrivParameters = DotNetUtilities.ToRSAParameters(privKeyParameters);
-
-            RSACryptoServiceProvider rsaPrivate = new RSACryptoServiceProvider();
-            rsaPrivate.ImportParameters(rsaPrivParameters);
 
             RsaKeyParameters pubKeyParameters = GetRsaKeyParametersFromPem(pubKeyText);
             RSAParameters rsaPubParameters = DotNetUtilities.ToRSAParameters(pubKeyParameters);
@@ -126,6 +125,7 @@ namespace Cur
                 Console.ReadKey();
                 Environment.Exit(0);
             }
+
             string jsonData = File.ReadAllText(DataFile);
 
             dynamic parsedData = JsonConvert.DeserializeObject(jsonData);
@@ -139,14 +139,46 @@ namespace Cur
             int keySizeBytes = 256; // 2048 位密钥为 256 字节
             List<byte> decryptedData = new List<byte>();
 
-            for (int i = 0; i < content.Length; i += keySizeBytes)
+            foreach (string privKeyPath in privKeyPaths)
             {
-                int blockSize = Math.Min(keySizeBytes, content.Length - i);
-                byte[] block = new byte[blockSize];
-                Array.Copy(content, i, block, 0, blockSize);
+                string privKeyText = File.ReadAllText(privKeyPath);
 
-                byte[] decryptedBlock = rsaPrivate.Decrypt(block, false);
-                decryptedData.AddRange(decryptedBlock);
+                AsymmetricCipherKeyPair keyPair = GetAsymmetricCipherKeyPairFromPem(privKeyText);
+                RsaPrivateCrtKeyParameters privKeyParameters = (RsaPrivateCrtKeyParameters)keyPair.Private;
+                RSAParameters rsaPrivParameters = DotNetUtilities.ToRSAParameters(privKeyParameters);
+
+                RSACryptoServiceProvider rsaPrivate = new RSACryptoServiceProvider();
+                rsaPrivate.ImportParameters(rsaPrivParameters);
+
+                try
+                {
+                    for (int i = 0; i < content.Length; i += keySizeBytes)
+                    {
+                        int blockSize = Math.Min(keySizeBytes, content.Length - i);
+                        byte[] block = new byte[blockSize];
+                        Array.Copy(content, i, block, 0, blockSize);
+
+                        byte[] decryptedBlock = rsaPrivate.Decrypt(block, false);
+                        decryptedData.AddRange(decryptedBlock);
+                    }
+
+                    Console.WriteLine($"成功使用 {privKeyPath} 解密！");
+                    break;
+
+                }
+                catch
+                {
+                    Console.WriteLine($"尝试使用 {privKeyPath} 解密失败");
+                    decryptedData.Clear();
+                }
+            }
+
+            if (decryptedData.Count == 0)
+            {
+                Console.WriteLine("所有私钥解密失败。");
+                Console.Write("请按任意键继续...");
+                Console.ReadKey();
+                Environment.Exit(0);
             }
 
             byte[] result = decryptedData.ToArray();
@@ -156,9 +188,9 @@ namespace Cur
             Console.WriteLine("验证签名: " + verified);
 
             MemoryStream stream = new MemoryStream(result);
-            QueryCurrRegionHttpRsp message = QueryCurrRegionHttpRsp.Parser.ParseFrom(stream);
+            QueryCurrRegionHttpRsp message = Serializer.Deserialize<QueryCurrRegionHttpRsp>(stream);
             stream.Close();
-            string JsonOutput = JsonFormatter.ToDiagnosticString(message);
+            string JsonOutput = JsonConvert.SerializeObject(message, Formatting.Indented);
             string FormattedJson = JsonConvert.SerializeObject(JsonConvert.DeserializeObject(JsonOutput), Formatting.Indented);
             string FilePath = SaveFile();
             if (FilePath == null)
